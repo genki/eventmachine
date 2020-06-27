@@ -44,13 +44,19 @@ extern "C" {
 		EM_PROTO_SSLv3 = 4,
 		EM_PROTO_TLSv1 = 8,
 		EM_PROTO_TLSv1_1 = 16,
+#ifdef TLS1_3_VERSION
+		EM_PROTO_TLSv1_2 = 32,
+		EM_PROTO_TLSv1_3 = 64
+#else
 		EM_PROTO_TLSv1_2 = 32
+#endif
 	};
 
 	void evma_initialize_library (EMCallback);
 	bool evma_run_machine_once();
 	void evma_run_machine();
 	void evma_release_library();
+	const size_t evma_get_timer_count ();
 	const uintptr_t evma_install_oneshot_timer (uint64_t milliseconds);
 	const uintptr_t evma_connect_to_server (const char *bind_addr, int bind_port, const char *server, int port);
 	const uintptr_t evma_connect_to_unix_server (const char *server);
@@ -91,6 +97,8 @@ extern "C" {
 	int evma_get_sockname (const uintptr_t binding, struct sockaddr*, socklen_t*);
 	int evma_get_subprocess_pid (const uintptr_t binding, pid_t*);
 	int evma_get_subprocess_status (const uintptr_t binding, int*);
+	int evma_enable_keepalive (const uintptr_t binding, int idle, int intvl, int cnt);
+	int evma_disable_keepalive (const uintptr_t binding);
 	int evma_get_connection_count();
 	int evma_send_data_to_connection (const uintptr_t binding, const char *data, int data_length);
 	int evma_send_datagram (const uintptr_t binding, const char *data, int data_length, const char *address, int port);

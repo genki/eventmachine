@@ -106,7 +106,7 @@ task :devkit do
   end
 end
 
-if RUBY_PLATFORM =~ /mingw|mswin/
+if RUBY_PLATFORM =~ /mingw|mswin/ && ENV['GITHUB_ACTIONS'].nil?
   Rake::Task['compile'].prerequisites.unshift 'devkit'
 end
 
@@ -114,7 +114,7 @@ desc "Build binary gems for Windows with rake-compiler-dock"
 task 'gem:windows' do
   require 'rake_compiler_dock'
   RakeCompilerDock.sh <<-EOT
-    RUBY_CC_VERSION="${RUBY_CC_VERSION//1.8.7/}"
+    RUBY_CC_VERSION="${RUBY_CC_VERSION//1.9.2/}"
     bundle && rake cross native gem
   EOT
 end

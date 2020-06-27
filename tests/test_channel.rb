@@ -1,4 +1,4 @@
-require 'em_test_helper'
+require_relative 'em_test_helper'
 
 class TestEMChannel < Test::Unit::TestCase
   def test_channel_subscribe
@@ -64,8 +64,8 @@ class TestEMChannel < Test::Unit::TestCase
      subs = 0
      EM.run do
        c = EM::Channel.new
-       c.subscribe { |v| s = v }
-       c.subscribe { |v| s = v }
+       c.subscribe { |v| }
+       c.subscribe { |v| }
        EM.next_tick { EM.stop }
        subs = c.num_subscribers
      end

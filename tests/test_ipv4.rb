@@ -1,4 +1,4 @@
-require 'em_test_helper'
+require_relative 'em_test_helper'
 
 class TestIPv4 < Test::Unit::TestCase
   # Runs a TCP server in the local IPv4 address, connects to it and sends a specific data.
@@ -33,7 +33,7 @@ class TestIPv4 < Test::Unit::TestCase
 
     @@received_data = nil
     @local_port = next_port
-    setup_timeout(2)
+    setup_timeout(darwin? ? 4 : 2)
 
     EM.run do
       EM::open_datagram_socket(@@public_ipv4, @local_port) do |s|
@@ -55,7 +55,8 @@ class TestIPv4 < Test::Unit::TestCase
   # EM::ConnectionError.
   def test_tcp_connect_to_invalid_ipv4
     omit_if(!Test::Unit::TestCase.public_ipv4?)
-
+    pend("\nFIXME: Windows as of 2018-06-23 on 32 bit >= 2.4 (#{RUBY_VERSION} #{RUBY_PLATFORM})") if RUBY_PLATFORM[/i386-mingw/] && RUBY_VERSION >= '2.4'
+    
     invalid_ipv4 = "9.9:9"
 
     EM.run do

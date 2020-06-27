@@ -136,7 +136,7 @@ module EventMachine
     # processor still wants them in seconds.
     # @private
     def add_oneshot_timer interval
-      Reactor.instance.install_oneshot_timer(interval / 1000)
+      Reactor.instance.install_oneshot_timer(interval.to_f / 1000)
     end
 
     # @private
@@ -430,6 +430,11 @@ module EventMachine
       # Needs to be implemented. Currently a no-op stub to allow
       # certain software to operate with the EM pure-ruby.
     end
+
+    # @private
+    def report_connection_error_status signature
+      get_sock_opt(signature, Socket::SOL_SOCKET, Socket::SO_ERROR).int
+    end
   end
 end
 
@@ -501,6 +506,10 @@ module EventMachine
 
     def initialize
       initialize_for_run
+    end
+
+    def get_timer_count
+      @timers.size
     end
 
     def install_oneshot_timer interval

@@ -1,6 +1,20 @@
-require 'em_test_helper'
+require_relative 'em_test_helper'
 
 class TestResolver < Test::Unit::TestCase
+
+  # always true unless set
+  CI_WINDOWS = windows? && ENV.fetch('CI', 'true').casecmp('true').zero?
+
+  def ci_windows_retries(err)
+    if CI_WINDOWS and err.is_a? String and err[/retries exceeded/]
+      EM.stop
+      notify 'Intermittent Appveyor DNS error: retries exceeded'
+      true
+    else
+      false
+    end
+  end
+
   def test_nameserver
     assert_kind_of(String, EM::DNS::Resolver.nameserver)
   end
@@ -17,11 +31,14 @@ class TestResolver < Test::Unit::TestCase
   end
 
   def test_a
-    pend('FIXME: this test is broken on Windows') if windows?
+    pend('FIXME: this test is broken on Windows') if windows? && RUBY_VERSION < "2.4"
 
     EM.run {
       d = EM::DNS::Resolver.resolve "example.com"
-      d.errback { assert false }
+      d.errback { |err|
+        return if ci_windows_retries err
+        assert false, "failed to resolve example.com: #{err}"
+      }
       d.callback { |r|
         assert r
         EM.stop
@@ -47,11 +64,14 @@ class TestResolver < Test::Unit::TestCase
 
   # There isn't a public DNS entry like 'example.com' with an A rrset
   def test_a_pair
-    pend('FIXME: this test is broken on Windows') if windows?
+    pend('FIXME: this test is broken on Windows') if windows? && RUBY_VERSION < "2.4"
 
     EM.run {
       d = EM::DNS::Resolver.resolve "yahoo.com"
-      d.errback { |err| assert false, "failed to resolve yahoo.com: #{err}" }
+      d.errback { |err|
+        return if ci_windows_retries err
+        assert false, "failed to resolve yahoo.com: #{err}"
+      }
       d.callback { |r|
         assert_kind_of(Array, r)
         assert r.size > 1, "returned #{r.size} results: #{r.inspect}"
@@ -67,7 +87,8 @@ class TestResolver < Test::Unit::TestCase
       d = EM::DNS::Resolver.resolve "localhost"
       d.errback { assert false }
       d.callback { |r|
-        assert_include(["127.0.0.1", "::1"], r.first)
+        # "127.0.1.1" added for testing on bionic 18.04
+        assert_include(["127.0.0.1", "127.0.1.1", "::1"], r.first)
         assert_kind_of(Array, r)
 
         EM.stop
@@ -76,11 +97,14 @@ class TestResolver < Test::Unit::TestCase
   end
 
   def test_timer_cleanup
-    pend('FIXME: this test is broken on Windows') if windows?
+    pend('FIXME: this test is broken on Windows') if windows? && RUBY_VERSION < "2.4"
 
     EM.run {
       d = EM::DNS::Resolver.resolve "example.com"
-      d.errback { |err| assert false, "failed to resolve example.com: #{err}" }
+      d.errback { |err|
+        return if ci_windows_retries err
+        assert false, "failed to resolve example.com: #{err}"
+      }
       d.callback { |r|
         # This isn't a great test, but it's hard to get more canonical
         # confirmation that the timer is cancelled

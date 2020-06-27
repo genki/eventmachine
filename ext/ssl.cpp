@@ -120,7 +120,7 @@ static void InitializeDefaultCredentials()
 SslContext_t::SslContext_t
 **************************/
 
-SslContext_t::SslContext_t (bool is_server, const string &privkeyfile, const string &certchainfile, const string &cipherlist, const string &ecdh_curve, const string &dhparam, int ssl_version) :
+SslContext_t::SslContext_t (bool is_server, const std::string &privkeyfile, const std::string &certchainfile, const std::string &cipherlist, const std::string &ecdh_curve, const std::string &dhparam, int ssl_version) :
 	bIsServer (is_server),
 	pCtx (NULL),
 	PrivateKey (NULL),
@@ -144,8 +144,11 @@ SslContext_t::SslContext_t (bool is_server, const string &privkeyfile, const str
 
 		InitializeDefaultCredentials();
 	}
-
+	#ifdef HAVE_TLS_SERVER_METHOD
+	pCtx = SSL_CTX_new (bIsServer ? TLS_server_method() : TLS_client_method());
+	#else
 	pCtx = SSL_CTX_new (bIsServer ? SSLv23_server_method() : SSLv23_client_method());
+	#endif
 	if (!pCtx)
 		throw std::runtime_error ("no SSL context");
 
@@ -178,6 +181,11 @@ SslContext_t::SslContext_t (bool is_server, const string &privkeyfile, const str
 	#ifdef SSL_OP_NO_TLSv1_2
 	if (!(ssl_version & EM_PROTO_TLSv1_2))
 		SSL_CTX_set_options (pCtx, SSL_OP_NO_TLSv1_2);
+	#endif
+
+	#ifdef SSL_OP_NO_TLSv1_3
+	if (!(ssl_version & EM_PROTO_TLSv1_3))
+		SSL_CTX_set_options (pCtx, SSL_OP_NO_TLSv1_3);
 	#endif
 
 	#ifdef SSL_MODE_RELEASE_BUFFERS
@@ -219,7 +227,7 @@ SslContext_t::SslContext_t (bool is_server, const string &privkeyfile, const str
 				BIO_free(bio);
 				char buf [500];
 				snprintf (buf, sizeof(buf)-1, "dhparam: PEM_read_bio_DHparams(%s) failed", dhparam.c_str());
-				throw new std::runtime_error(buf);
+				throw std::runtime_error (buf);
 			}
 
 			SSL_CTX_set_tmp_dh(pCtx, dh);
@@ -304,7 +312,7 @@ SslContext_t::~SslContext_t()
 SslBox_t::SslBox_t
 ******************/
 
-SslBox_t::SslBox_t (bool is_server, const string &privkeyfile, const string &certchainfile, bool verify_peer, bool fail_if_no_peer_cert, const string &snihostname, const string &cipherlist, const string &ecdh_curve, const string &dhparam, int ssl_version, const uintptr_t binding):
+SslBox_t::SslBox_t (bool is_server, const std::string &privkeyfile, const std::string &certchainfile, bool verify_peer, bool fail_if_no_peer_cert, const std::string &snihostname, const std::string &cipherlist, const std::string &ecdh_curve, const std::string &dhparam, int ssl_version, const uintptr_t binding):
 	bIsServer (is_server),
 	bHandshakeCompleted (false),
 	bVerifyPeer (verify_peer),
@@ -345,8 +353,11 @@ SslBox_t::SslBox_t (bool is_server, const string &privkeyfile, const string &cer
 		SSL_set_verify(pSSL, mode, ssl_verify_wrapper);
 	}
 
-	if (!bIsServer)
-		SSL_connect (pSSL);
+	if (!bIsServer) {
+		int e = SSL_connect (pSSL);
+		if (e != 1)
+			ERR_print_errors_fp(stderr);
+	}
 }
 
 
@@ -397,6 +408,7 @@ int SslBox_t::GetPlaintext (char *buf, int bufsize)
 		if (e != 1) {
 			int er = SSL_get_error (pSSL, e);
 			if (er != SSL_ERROR_WANT_READ) {
+				ERR_print_errors_fp(stderr);
 				// Return -1 for a nonfatal error, -2 for an error that should force the connection down.
 				return (er == SSL_ERROR_SSL) ? (-2) : (-1);
 			}

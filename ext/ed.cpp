@@ -192,7 +192,7 @@ void EventableDescriptor::Close()
 	 * the fd associated with this EventableDescriptor is
 	 * closing.
 	 *
-	 * EventMachine also never closes fds for STDIN, STDOUT and 
+	 * EventMachine also never closes fds for STDIN, STDOUT and
 	 * STDERR (0, 1 & 2)
 	 */
 
@@ -264,6 +264,139 @@ bool EventableDescriptor::IsCloseScheduled()
 }
 
 
+/***********************************
+EventableDescriptor::EnableKeepalive
+***********************************/
+int EventableDescriptor::EnableKeepalive(int idle, int intvl, int cnt)
+{
+	int ret;
+
+#ifdef OS_WIN32
+	DWORD len;
+	struct tcp_keepalive args;
+
+	args.onoff = 1;
+
+	if (idle > 0)
+		args.keepalivetime = idle * 1000;
+	if (intvl > 0)
+		args.keepaliveinterval = intvl * 1000;
+
+	ret = WSAIoctl(MySocket, SIO_KEEPALIVE_VALS, &args, sizeof(args), NULL, 0, &len, NULL, NULL);
+	if (ret < 0) {
+		int err = WSAGetLastError();
+		char buf[200];
+		buf[0] = '\0';
+
+		FormatMessage (FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+			NULL, err, MAKELANGID (LANG_NEUTRAL, SUBLANG_DEFAULT), buf, sizeof(buf), NULL);
+
+		if (! buf[0])
+			snprintf (buf, sizeof(buf)-1, "unable to enable keepalive: %d", err);
+
+		throw std::runtime_error (buf);
+	}
+
+#else
+	int val = 1;
+
+	// All the Unixen
+	ret = setsockopt(MySocket, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val));
+	if (ret < 0) {
+		char buf[200];
+		snprintf (buf, sizeof(buf)-1, "unable to enable keepalive: %s", strerror(errno));
+		throw std::runtime_error (buf);
+	}
+
+	#ifdef TCP_KEEPALIVE
+	// BSDs and Mac OS X: idle time used when SO_KEEPALIVE is enabled
+	// 0 means use the system default value, so we let it through
+	if (idle >= 0) {
+		ret = setsockopt(MySocket, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof(idle));
+		if (ret < 0) {
+			char buf[200];
+			snprintf (buf, sizeof(buf)-1, "unable set keepalive idle: %s", strerror(errno));
+			throw std::runtime_error (buf);
+		}
+	}
+	#endif
+	#ifdef TCP_KEEPIDLE
+	// Linux: interval between last data pkt and first keepalive pkt
+	if (idle > 0) {
+		ret = setsockopt(MySocket, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+		if (ret < 0) {
+			char buf[200];
+			snprintf (buf, sizeof(buf)-1, "unable set keepalive idle: %s", strerror(errno));
+			throw std::runtime_error (buf);
+		}
+	}
+	#endif
+	#ifdef TCP_KEEPINTVL
+	// Linux (and recent BSDs, Mac OS X, Solaris): interval between keepalives
+	if (intvl > 0) {
+		ret = setsockopt(MySocket, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
+		if (ret < 0) {
+			char buf[200];
+			snprintf (buf, sizeof(buf)-1, "unable set keepalive interval: %s", strerror(errno));
+			throw std::runtime_error (buf);
+		}
+	}
+	#endif
+	#ifdef TCP_KEEPCNT
+	// Linux (and recent BSDs, Mac OS X, Solaris): number of dropped probes before disconnect
+	if (cnt > 0) {
+		ret = setsockopt(MySocket, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
+		if (ret < 0) {
+			char buf[200];
+			snprintf (buf, sizeof(buf)-1, "unable set keepalive count: %s", strerror(errno));
+			throw std::runtime_error (buf);
+		}
+	}
+	#endif
+#endif
+
+	return ret;
+}
+
+/***********************************
+EventableDescriptor::DisableKeepalive
+***********************************/
+int EventableDescriptor::DisableKeepalive()
+{
+	int ret;
+
+#ifdef OS_WIN32
+	DWORD len;
+	struct tcp_keepalive args;
+	args.onoff = 0;
+	ret = WSAIoctl(MySocket, SIO_KEEPALIVE_VALS, &args, sizeof(args), NULL, 0, &len, NULL, NULL);
+	if (ret < 0) {
+		int err = WSAGetLastError();
+		char buf[200];
+		buf[0] = '\0';
+
+		FormatMessage (FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+			NULL, err, MAKELANGID (LANG_NEUTRAL, SUBLANG_DEFAULT), buf, sizeof(buf), NULL);
+
+		if (! buf[0])
+			snprintf (buf, sizeof(buf)-1, "unable to enable keepalive: %d", err);
+
+		throw std::runtime_error (buf);
+	}
+#else
+	int val = 0;
+	ret = setsockopt(MySocket, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val));
+	if (ret < 0) {
+		char buf[200];
+		snprintf (buf, sizeof(buf)-1, "unable to disable keepalive: %s", strerror(errno));
+		throw std::runtime_error (buf);
+	}
+#endif
+
+	return ret;
+}
+
+
 /*******************************
 EventableDescriptor::StartProxy
 *******************************/
@@ -320,7 +453,7 @@ void EventableDescriptor::_GenericInboundDispatch(const char *buf, unsigned long
 
 	if (ProxyTarget) {
 		if (BytesToProxy > 0) {
-			unsigned long proxied = min(BytesToProxy, size);
+			unsigned long proxied = std::min(BytesToProxy, size);
 			ProxyTarget->SendOutboundData(buf, proxied);
 			ProxiedBytes += (unsigned long) proxied;
 			BytesToProxy -= proxied;
@@ -1059,7 +1192,7 @@ void ConnectionDescriptor::_WriteOutboundData()
 	 * and when we get here. So this condition is not an error.
 	 *
 	 * 20Jul07, added the same kind of protection against an invalid socket
-	 * that is at the top of ::Read. Not entirely how this could happen in 
+	 * that is at the top of ::Read. Not entirely how this could happen in
 	 * real life (connection-reset from the remote peer, perhaps?), but I'm
 	 * doing it to address some reports of crashing under heavy loads.
 	 */
@@ -1148,7 +1281,7 @@ void ConnectionDescriptor::_WriteOutboundData()
 	#ifdef HAVE_WRITEV
 	if (!err) {
 		unsigned int sent = bytes_written;
-		deque<OutboundPage>::iterator op = OutboundPages.begin();
+		std::deque<OutboundPage>::iterator op = OutboundPages.begin();
 
 		for (int i = 0; i < iovcnt; i++) {
 			if (iov[i].iov_len <= sent) {
@@ -1422,7 +1555,7 @@ void ConnectionDescriptor::_DispatchCiphertext()
 		// try to put plaintext. INCOMPLETE, doesn't belong here?
 		// In SendOutboundData, we're spooling plaintext directly
 		// into SslBox. That may be wrong, we may need to buffer it
-		// up here! 
+		// up here!
 		/*
 		const char *ptr;
 		int ptr_length;
@@ -1451,6 +1584,15 @@ ConnectionDescriptor::Heartbeat
 
 void ConnectionDescriptor::Heartbeat()
 {
+	/* When TLS is enabled, it can skew the delivery of heartbeats and
+	 * the LastActivity time-keeping by hundreds of microseconds on fast
+	 * machines up to tens of thousands of microseconds on very slow
+	 * machines.  To prevent failing to timeout in a timely fashion we use
+	 * the timer-quantum to compensate for the discrepancy so the
+	 * comparisons are more likely to match when they are nearly equal.
+	 */
+	uint64_t skew = MyEventMachine->GetTimerQuantum();
+
 	/* Only allow a certain amount of time to go by while waiting
 	 * for a pending connect. If it expires, then kill the socket.
 	 * For a connected socket, close it if its inactivity timer
@@ -1465,7 +1607,7 @@ void ConnectionDescriptor::Heartbeat()
 		}
 	}
 	else {
-		if (InactivityTimeout && ((MyEventMachine->GetCurrentLoopTime() - LastActivity) >= InactivityTimeout)) {
+		if (InactivityTimeout && ((skew + MyEventMachine->GetCurrentLoopTime() - LastActivity) >= InactivityTimeout)) {
 			UnbindReasonCode = ETIMEDOUT;
 			ScheduleClose (false);
 			//bCloseNow = true;

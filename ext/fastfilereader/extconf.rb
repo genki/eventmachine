@@ -36,9 +36,15 @@ if RbConfig::CONFIG["host_os"] =~ /mingw/
     any? { |v| v.include?("FD_SETSIZE") }
 
   add_define "FD_SETSIZE=32767" unless found
+  # needed for new versions of headers-git & crt-git
+  if RbConfig::CONFIG["ruby_version"] >= "2.4"
+    append_ldflags "-l:libssp.a -fstack-protector"
+  end
 end
 
 # Main platform invariances:
+
+ldshared = CONFIG['LDSHARED']
 
 case RUBY_PLATFORM
 when /mswin32/, /mingw32/, /bccwin32/
@@ -104,6 +110,11 @@ when /cygwin/
 else
   # on Unix we need a g++ link, not gcc.
   CONFIG['LDSHARED'] = "$(CXX) -shared"
+end
+
+if RUBY_ENGINE == "truffleruby"
+  # Keep the original LDSHARED on TruffleRuby, as linking is done on bitcode
+  CONFIG['LDSHARED'] = ldshared
 end
 
 create_makefile "fastfilereaderext"

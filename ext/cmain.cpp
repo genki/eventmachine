@@ -95,6 +95,15 @@ extern "C" void evma_run_machine()
 	EventMachine->Run();
 }
 
+/********************************
+evma_get_timer_count
+********************************/
+
+extern "C" const size_t evma_get_timer_count ()
+{
+	ensure_eventmachine("evma_get_timer_count");
+	return EventMachine->GetTimerCount();
+}
 
 /**************************
 evma_install_oneshot_timer
@@ -368,9 +377,8 @@ extern "C" int evma_is_watch_only (const uintptr_t binding)
 {
 	EventableDescriptor *cd = dynamic_cast <EventableDescriptor*> (Bindable_t::GetObject (binding));
 	if (cd)
-    return cd->IsWatchOnly() ? 1 : 0;
-
-	return 0;
+		return cd->IsWatchOnly() ? 1 : 0;
+	return -1;
 }
 
 /****************************
@@ -810,6 +818,43 @@ extern "C" int evma_get_outbound_data_size (const uintptr_t binding)
 	return ed ? ed->GetOutboundDataSize() : 0;
 }
 
+/*********************
+evma_enable_keepalive
+*********************/
+
+extern "C" int evma_enable_keepalive (const uintptr_t binding, int idle, int intvl, int cnt)
+{
+	ensure_eventmachine("evma_enable_keepalive");
+	EventableDescriptor *ed = dynamic_cast <EventableDescriptor*> (Bindable_t::GetObject (binding));
+	if (ed)
+		return ed->EnableKeepalive(idle, intvl, cnt);
+	else
+		#ifdef BUILD_FOR_RUBY
+			rb_raise(rb_eRuntimeError, "invalid binding to enable keepalive");
+		#else
+			throw std::runtime_error ("invalid binding to enable keepalive");
+		#endif
+			return -1;
+}
+
+/**********************
+evma_disable_keepalive
+**********************/
+
+extern "C" int evma_disable_keepalive (const uintptr_t binding)
+{
+	ensure_eventmachine("evma_disable_keepalive");
+	EventableDescriptor *ed = dynamic_cast <EventableDescriptor*> (Bindable_t::GetObject (binding));
+	if (ed)
+		return ed->DisableKeepalive();
+	else
+		#ifdef BUILD_FOR_RUBY
+			rb_raise(rb_eRuntimeError, "invalid binding to enable keepalive");
+		#else
+			throw std::runtime_error ("invalid binding to enable keepalive");
+		#endif
+			return -1;
+}
 
 /**************
 evma_set_epoll

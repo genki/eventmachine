@@ -1,4 +1,4 @@
-require 'em_test_helper'
+require_relative 'em_test_helper'
 
 class TestPool < Test::Unit::TestCase
   def pool
@@ -56,7 +56,7 @@ class TestPool < Test::Unit::TestCase
     assert_equal pooled_res, pooled_res2
   end
 
-  def test_supports_custom_error_handler
+  def test_supports_custom_on_error
     eres = nil
     pool.on_error do |res|
       eres = res

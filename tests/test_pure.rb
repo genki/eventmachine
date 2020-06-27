@@ -1,4 +1,4 @@
-require 'em_test_helper'
+require_relative 'em_test_helper'
 
 class TestPure < Test::Unit::TestCase
 
@@ -124,6 +124,7 @@ class TestPure < Test::Unit::TestCase
   end
 
   def test_start_tls
+    omit("No SSL") unless EM.ssl?
     $client_handshake_completed, $server_handshake_completed = false, false
     $client_received_data, $server_received_data = nil, nil
     EM.run do
@@ -135,5 +136,21 @@ class TestPure < Test::Unit::TestCase
     assert($server_handshake_completed)
     assert($client_received_data == "Hello World!")
     assert($server_received_data == "Hello World!")
+  end
+
+  def test_periodic_timer
+    x = 0
+    start, finish = nil
+
+    EM.run {
+      start = Time.now.to_f
+      EM::PeriodicTimer.new(0.2) do
+        x += 1
+        finish = Time.now.to_f
+        EM.stop if x == 4
+      end
+    }
+    assert_in_delta 0.8, (finish - start), (darwin? ? 0.6 : 0.2)
+    assert_equal 4, x
   end
 end

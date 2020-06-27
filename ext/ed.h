@@ -62,6 +62,9 @@ class EventableDescriptor: public Bindable_t
 		bool IsCloseScheduled();
 		virtual void HandleError(){ ScheduleClose (false); }
 
+		int EnableKeepalive(int idle, int intvl, int cnt);
+		int DisableKeepalive();
+
 		void SetEventCallback (EMCallback);
 
 		virtual bool GetPeername (struct sockaddr*, socklen_t*) = 0;
@@ -251,7 +254,7 @@ class ConnectionDescriptor: public EventableDescriptor
 		bool bReadAttemptedAfterClose;
 		bool bWriteAttemptedAfterClose;
 
-		deque<OutboundPage> OutboundPages;
+		std::deque<OutboundPage> OutboundPages;
 		int OutboundDataSize;
 
 		#ifdef WITH_SSL
@@ -326,7 +329,7 @@ class DatagramDescriptor: public EventableDescriptor
 			struct sockaddr_in6 From;
 		};
 
-		deque<OutboundPage> OutboundPages;
+		std::deque<OutboundPage> OutboundPages;
 		int OutboundDataSize;
 
 		struct sockaddr_in6 ReturnAddress;
@@ -394,7 +397,7 @@ class PipeDescriptor: public EventableDescriptor
 	protected:
 		bool bReadAttemptedAfterClose;
 
-		deque<OutboundPage> OutboundPages;
+		std::deque<OutboundPage> OutboundPages;
 		int OutboundDataSize;
 
 		pid_t SubprocessPid;

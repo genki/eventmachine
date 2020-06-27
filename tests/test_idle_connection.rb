@@ -1,4 +1,4 @@
-require 'em_test_helper'
+require_relative 'em_test_helper'
 
 class TestIdleConnection < Test::Unit::TestCase
   def setup
@@ -25,7 +25,7 @@ class TestIdleConnection < Test::Unit::TestCase
       end
     end
 
-    assert_in_delta 0.3, a, 0.1
+    assert_in_delta 0.3, a, (darwin? ? 0.2 : 0.1)
     assert_in_delta 0, b, 0.1
   end
 end

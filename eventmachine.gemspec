@@ -3,8 +3,9 @@ require File.expand_path('../lib/em/version', __FILE__)
 Gem::Specification.new do |s|
   s.name = 'eventmachine'
   s.version = EventMachine::VERSION
-  s.homepage = 'http://rubyeventmachine.com'
+  s.homepage = 'https://github.com/eventmachine/eventmachine'
   s.licenses = ['Ruby', 'GPL-2.0']
+  s.required_ruby_version = '>= 2.0.0'
 
   s.authors = ["Francis Cianfrocca", "Aman Gupta"]
   s.email   = ["garbagecat10@gmail.com", "aman@tmm1.net"]
@@ -14,9 +15,16 @@ Gem::Specification.new do |s|
 
   s.extensions = ["ext/extconf.rb", "ext/fastfilereader/extconf.rb"]
 
-  s.add_development_dependency 'test-unit', '~> 2.0'
-  s.add_development_dependency 'rake-compiler', '~> 0.9.5'
-  s.add_development_dependency 'rake-compiler-dock', '~> 0.5.1'
+  if s.respond_to?(:metadata=)
+    s.metadata ||= {}
+    if RbConfig::CONFIG['ruby_version'] >= '2.5'
+      s.metadata["msys2_mingw_dependencies"] = "openssl"
+    end
+  end
+
+  s.add_development_dependency 'test-unit', '~> 3.2'
+  s.add_development_dependency 'rake-compiler', '~> 1.1'
+  s.add_development_dependency 'rake-compiler-dock', '~> 0.6.3'
 
   s.summary = 'Ruby/EventMachine library'
   s.description = <<-EOT

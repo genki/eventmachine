@@ -1,10 +1,11 @@
-require 'em_test_helper'
-require 'socket'
+require_relative 'em_test_helper'
 
 class TestBasic < Test::Unit::TestCase
   def setup
     @port = next_port
   end
+
+  INVALID = "(not known|no data of the requested|No such host is known|Temporary failure in name resolution)"
 
   def test_connection_class_cache
     mod = Module.new
@@ -20,7 +21,6 @@ class TestBasic < Test::Unit::TestCase
   end
 
   #-------------------------------------
-
 
   def test_em
     assert_nothing_raised do
@@ -38,7 +38,7 @@ class TestBasic < Test::Unit::TestCase
   def test_timer
     assert_nothing_raised do
       EM.run {
-        setup_timeout
+        setup_timeout(darwin? ? 0.6 : 0.4)
         n = 0
         EM.add_periodic_timer(0.1) {
           n += 1
@@ -113,6 +113,9 @@ class TestBasic < Test::Unit::TestCase
       EM.start_server "127.0.0.1", @port
       EM.connect "127.0.0.1", @port, UnbindError
     }
+
+    # Remove the error handler before the next test
+    EM.error_handler(nil)
   end
 
   module BrsTestSrv
@@ -144,8 +147,6 @@ class TestBasic < Test::Unit::TestCase
   end
 
   def test_bind_connect
-    pend('FIXME: this test is broken on Windows') if windows?
-
     local_ip = UDPSocket.open {|s| s.connect('localhost', 80); s.addr.last }
 
     bind_port = next_port
@@ -162,7 +163,7 @@ class TestBasic < Test::Unit::TestCase
     end
 
     EM.run do
-      setup_timeout
+      darwin? ? setup_timeout(0.3) : setup_timeout
       EM.start_server "127.0.0.1", @port, bound_server
       EM.bind_connect local_ip, bind_port, "127.0.0.1", @port
     end
@@ -172,6 +173,7 @@ class TestBasic < Test::Unit::TestCase
   end
 
   def test_invalid_address_bind_connect_dst
+    pend("\nFIXME: Windows as of 2018-06-23 on 32 bit >= 2.4 (#{RUBY_VERSION} #{RUBY_PLATFORM})") if RUBY_PLATFORM[/i386-mingw/] && RUBY_VERSION >= '2.4'
     e = nil
     EM.run do
       begin
@@ -184,10 +186,11 @@ class TestBasic < Test::Unit::TestCase
     end
 
     assert_kind_of(EventMachine::ConnectionError, e)
-    assert_match(/unable to resolve address:.*not known/, e.message)
+    assert_match(/unable to resolve address:.*#{INVALID}/, e.message)
   end
 
   def test_invalid_address_bind_connect_src
+    pend("\nFIXME: Windows as of 2018-06-23 on 32 bit >= 2.4 (#{RUBY_VERSION} #{RUBY_PLATFORM})") if RUBY_PLATFORM[/i386-mingw/] && RUBY_VERSION >= '2.4'
     e = nil
     EM.run do
       begin
@@ -200,7 +203,7 @@ class TestBasic < Test::Unit::TestCase
     end
 
     assert_kind_of(EventMachine::ConnectionError, e)
-    assert_match(/invalid bind address:.*not known/, e.message)
+    assert_match(/invalid bind address:.*#{INVALID}/, e.message)
   end
 
   def test_reactor_thread?
@@ -217,7 +220,7 @@ class TestBasic < Test::Unit::TestCase
     end
     assert x
   end
-  
+
   def test_schedule_from_thread
     x = false
     EM.run do
@@ -236,14 +239,14 @@ class TestBasic < Test::Unit::TestCase
     }
     assert_equal(interval, $interval)
   end
-  
+
   module PostInitRaiser
     ERR = Class.new(StandardError)
     def post_init
       raise ERR
     end
   end
-  
+
   def test_bubble_errors_from_post_init
     assert_raises(PostInitRaiser::ERR) do
       EM.run do
@@ -252,14 +255,14 @@ class TestBasic < Test::Unit::TestCase
       end
     end
   end
-  
+
   module InitializeRaiser
     ERR = Class.new(StandardError)
     def initialize
       raise ERR
     end
   end
-  
+
   def test_bubble_errors_from_initialize
     assert_raises(InitializeRaiser::ERR) do
       EM.run do
@@ -268,7 +271,7 @@ class TestBasic < Test::Unit::TestCase
       end
     end
   end
-  
+
   def test_schedule_close
     omit_if(jruby?)
     localhost, port = '127.0.0.1', 9000
@@ -308,6 +311,9 @@ class TestBasic < Test::Unit::TestCase
       end
       EM.add_timer(0.001) { EM.stop }
     end
+
+    # Remove the error handler before the next test
+    EM.error_handler(nil)
 
     assert_equal 1, errors.size
     assert_equal [:first, :second], ticks

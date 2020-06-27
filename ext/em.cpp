@@ -164,8 +164,6 @@ EventMachine_t::~EventMachine_t()
 {
 	// Run down descriptors
 	size_t i;
-	for (i = 0; i < DescriptorsToDelete.size(); i++)
- 		delete DescriptorsToDelete[i];
 	for (i = 0; i < NewDescriptors.size(); i++)
 		delete NewDescriptors[i];
 	for (i = 0; i < Descriptors.size(); i++)
@@ -176,7 +174,7 @@ EventMachine_t::~EventMachine_t()
 
 	// Remove any file watch descriptors
 	while(!Files.empty()) {
-		map<int, Bindable_t*>::iterator f = Files.begin();
+		std::map<int, Bindable_t*>::iterator f = Files.begin();
 		UnwatchFile (f->first);
 	}
 
@@ -220,6 +218,16 @@ void EventMachine_t::ScheduleHalt()
 bool EventMachine_t::Stopping()
 {
 	return bTerminateSignalReceived;
+}
+
+/*******************************
+EventMachine_t::GetTimerQuantum
+*******************************/
+
+uint64_t EventMachine_t::GetTimerQuantum()
+{
+	/* Convert timer-quantum to microseconds */
+	return (Quantum.tv_sec * 1000 + (Quantum.tv_usec + 500) / 1000) * 1000;
 }
 
 /*******************************
@@ -386,16 +394,12 @@ void EventMachine_t::_InitializeLoopBreaker()
 
 	#ifdef HAVE_EPOLL
 	if (Poller == Poller_Epoll) {
-		epfd = epoll_create (MaxEpollDescriptors);
+		epfd = epoll_create1(EPOLL_CLOEXEC);
 		if (epfd == -1) {
 			char buf[200];
 			snprintf (buf, sizeof(buf)-1, "unable to create epoll descriptor: %s", strerror(errno));
 			throw std::runtime_error (buf);
 		}
-		int cloexec = fcntl (epfd, F_GETFD, 0);
-		assert (cloexec >= 0);
-		cloexec |= FD_CLOEXEC;
-		fcntl (epfd, F_SETFD, cloexec);
 
 		assert (LoopBreakerReader >= 0);
 		LoopbreakDescriptor *ld = new LoopbreakDescriptor (LoopBreakerReader, this);
@@ -506,7 +510,7 @@ void EventMachine_t::_DispatchHeartbeats()
 	const EventableDescriptor *head = NULL;
 
 	while (true) {
-		multimap<uint64_t,EventableDescriptor*>::iterator i = Heartbeats.begin();
+		std::multimap<uint64_t,EventableDescriptor*>::iterator i = Heartbeats.begin();
 		if (i == Heartbeats.end())
 			break;
 		if (i->first > MyCurrentLoopTime)
@@ -534,9 +538,9 @@ void EventMachine_t::QueueHeartbeat(EventableDescriptor *ed)
 
 	if (heartbeat) {
 		#ifndef HAVE_MAKE_PAIR
-		Heartbeats.insert (multimap<uint64_t,EventableDescriptor*>::value_type (heartbeat, ed));
+		Heartbeats.insert (std::multimap<uint64_t,EventableDescriptor*>::value_type (heartbeat, ed));
 		#else
-		Heartbeats.insert (make_pair (heartbeat, ed));
+		Heartbeats.insert (std::make_pair (heartbeat, ed));
 		#endif
 	}
 }
@@ -547,8 +551,8 @@ EventMachine_t::ClearHeartbeat
 
 void EventMachine_t::ClearHeartbeat(uint64_t key, EventableDescriptor* ed)
 {
-	multimap<uint64_t,EventableDescriptor*>::iterator it;
-	pair<multimap<uint64_t,EventableDescriptor*>::iterator,multimap<uint64_t,EventableDescriptor*>::iterator> ret;
+	std::multimap<uint64_t,EventableDescriptor*>::iterator it;
+	std::pair<std::multimap<uint64_t,EventableDescriptor*>::iterator,std::multimap<uint64_t,EventableDescriptor*>::iterator> ret;
 	ret = Heartbeats.equal_range (key);
 	for (it = ret.first; it != ret.second; ++it) {
 		if (it->second == ed) {
@@ -605,6 +609,21 @@ bool EventMachine_t::RunOnce()
 }
 
 
+#ifdef HAVE_EPOLL
+typedef struct {
+	int epfd;
+	struct epoll_event *events;
+	int maxevents;
+	int timeout;
+} epoll_args_t;
+
+static void *nogvl_epoll_wait(void *args)
+{
+	epoll_args_t *a = (epoll_args_t *)args;
+	return (void *) (uintptr_t) epoll_wait (a->epfd, a->events, a->maxevents, a->timeout);
+}
+#endif
+
 /*****************************
 EventMachine_t::_RunEpollOnce
 *****************************/
@@ -620,16 +639,7 @@ void EventMachine_t::_RunEpollOnce()
 	#ifdef BUILD_FOR_RUBY
 	int ret = 0;
 
-	#ifdef HAVE_RB_WAIT_FOR_SINGLE_FD
 	if ((ret = rb_wait_for_single_fd(epfd, RB_WAITFD_IN|RB_WAITFD_PRI, &tv)) < 1) {
-	#else
-	fd_set fdreads;
-
-	FD_ZERO(&fdreads);
-	FD_SET(epfd, &fdreads);
-
-	if ((ret = rb_thread_select(epfd + 1, &fdreads, NULL, NULL, &tv)) < 1) {
-	#endif
 		if (ret == -1) {
 			assert(errno != EINVAL);
 			assert(errno != EBADF);
@@ -637,9 +647,8 @@ void EventMachine_t::_RunEpollOnce()
 		return;
 	}
 
-	TRAP_BEG;
-	s = epoll_wait (epfd, epoll_events, MaxEvents, 0);
-	TRAP_END;
+	epoll_args_t epoll_args = { epfd, epoll_events, MaxEvents, 0 };
+	s = (uintptr_t) rb_thread_call_without_gvl (nogvl_epoll_wait, &epoll_args, RUBY_UBF_IO, 0);
 	#else
 	int duration = 0;
 	duration = duration + (tv.tv_sec * 1000);
@@ -678,6 +687,23 @@ void EventMachine_t::_RunEpollOnce()
 }
 
 
+#ifdef HAVE_KQUEUE
+typedef struct {
+	int kqfd;
+	const struct kevent *changelist;
+	int nchanges;
+	struct kevent *eventlist;
+	int nevents;
+	const struct timespec *timeout;
+} kevent_args_t;
+
+static void *nogvl_kevent(void *args)
+{
+	kevent_args_t *a = (kevent_args_t *)args;
+	return (void *) (uintptr_t) kevent (a->kqfd, a->changelist, a->nchanges, a->eventlist, a->nevents, a->timeout);
+}
+#endif
+
 /******************************
 EventMachine_t::_RunKqueueOnce
 ******************************/
@@ -697,16 +723,7 @@ void EventMachine_t::_RunKqueueOnce()
 	#ifdef BUILD_FOR_RUBY
 	int ret = 0;
 
-	#ifdef HAVE_RB_WAIT_FOR_SINGLE_FD
 	if ((ret = rb_wait_for_single_fd(kqfd, RB_WAITFD_IN|RB_WAITFD_PRI, &tv)) < 1) {
-	#else
-	fd_set fdreads;
-
-	FD_ZERO(&fdreads);
-	FD_SET(kqfd, &fdreads);
-
-	if ((ret = rb_thread_select(kqfd + 1, &fdreads, NULL, NULL, &tv)) < 1) {
-	#endif
 		if (ret == -1) {
 			assert(errno != EINVAL);
 			assert(errno != EBADF);
@@ -714,10 +731,9 @@ void EventMachine_t::_RunKqueueOnce()
 		return;
 	}
 
-	TRAP_BEG;
 	ts.tv_sec = ts.tv_nsec = 0;
-	k = kevent (kqfd, NULL, 0, Karray, MaxEvents, &ts);
-	TRAP_END;
+	kevent_args_t kevent_args = { kqfd, NULL, 0, Karray, MaxEvents, &ts };
+	k = (uintptr_t) rb_thread_call_without_gvl (nogvl_kevent, &kevent_args, RUBY_UBF_IO, 0);
 	#else
 	k = kevent (kqfd, NULL, 0, Karray, MaxEvents, &ts);
 	#endif
@@ -747,7 +763,7 @@ void EventMachine_t::_RunKqueueOnce()
 				else if (ke->filter == EVFILT_WRITE)
 					ed->Write();
 				else
-					cerr << "Discarding unknown kqueue event " << ke->filter << endl;
+					std::cerr << "Discarding unknown kqueue event " << ke->filter << std::endl;
 
 				break;
 		}
@@ -756,7 +772,6 @@ void EventMachine_t::_RunKqueueOnce()
 		++ke;
 	}
 
-	// TODO, replace this with rb_thread_blocking_region for 1.9 builds.
 	#ifdef BUILD_FOR_RUBY
 	if (!rb_thread_alone()) {
 		rb_thread_schedule();
@@ -786,12 +801,12 @@ timeval EventMachine_t::_TimeTilNextEvent()
 	uint64_t current_time = GetRealTime();
 
 	if (!Heartbeats.empty()) {
-		multimap<uint64_t,EventableDescriptor*>::iterator heartbeats = Heartbeats.begin();
+		std::multimap<uint64_t,EventableDescriptor*>::iterator heartbeats = Heartbeats.begin();
 		next_event = heartbeats->first;
 	}
 
 	if (!Timers.empty()) {
-		multimap<uint64_t,Timer_t>::iterator timers = Timers.begin();
+		std::multimap<uint64_t,Timer_t>::iterator timers = Timers.begin();
 		if (next_event == 0 || timers->first < next_event)
 			next_event = timers->first;
 	}
@@ -842,17 +857,6 @@ void EventMachine_t::_CleanupSockets()
 		EventableDescriptor *ed = Descriptors[i];
 		assert (ed);
 		if (ed->ShouldDelete()) {
-			DescriptorsToDelete.push_back(ed);
-		}
-		else
-			Descriptors [j++] = ed;
-	}
-	while ((size_t)j < Descriptors.size())
-		Descriptors.pop_back();
-
-	nSockets = DescriptorsToDelete.size();
-	for (i=0; i < nSockets; i++) {
-		EventableDescriptor *ed = DescriptorsToDelete[i];
 		#ifdef HAVE_EPOLL
 			if (Poller == Poller_Epoll) {
 				assert (epfd != -1);
@@ -868,9 +872,13 @@ void EventMachine_t::_CleanupSockets()
 				ModifiedDescriptors.erase(ed);
 			}
 		#endif
-		delete ed;
+			delete ed;
+		}
+		else
+			Descriptors [j++] = ed;
 	}
-	DescriptorsToDelete.clear();
+	while ((size_t)j < Descriptors.size())
+		Descriptors.pop_back();
 }
 
 /*********************************
@@ -916,39 +924,14 @@ SelectData_t::~SelectData_t()
 	rb_fd_term (&fderrors);
 }
 
-#ifdef BUILD_FOR_RUBY
-/*****************
-_SelectDataSelect
-*****************/
-
-#if defined(HAVE_RB_THREAD_BLOCKING_REGION) || defined(HAVE_RB_THREAD_CALL_WITHOUT_GVL)
-static VALUE _SelectDataSelect (void *v)
-{
-	SelectData_t *sd = (SelectData_t*)v;
-	sd->nSockets = select (sd->maxsocket+1, rb_fd_ptr(&(sd->fdreads)), rb_fd_ptr(&(sd->fdwrites)), rb_fd_ptr(&(sd->fderrors)), &(sd->tv));
-	return Qnil;
-}
-#endif
-
 /*********************
 SelectData_t::_Select
 *********************/
 
 int SelectData_t::_Select()
 {
-	#if defined(HAVE_RB_THREAD_CALL_WITHOUT_GVL)
-	// added in ruby 1.9.3
-	rb_thread_call_without_gvl ((void *(*)(void *))_SelectDataSelect, (void*)this, RUBY_UBF_IO, 0);
-	return nSockets;
-	#elif defined(HAVE_TBR)
-	// added in ruby 1.9.1, deprecated in ruby 2.0.0
-	rb_thread_blocking_region (_SelectDataSelect, (void*)this, RUBY_UBF_IO, 0);
-	return nSockets;
-	#else
-	return EmSelect (maxsocket+1, &fdreads, &fdwrites, &fderrors, &tv);
-	#endif
+	return EmSelect (maxsocket + 1, &fdreads, &fdwrites, &fderrors, &tv);
 }
-#endif
 
 void SelectData_t::_Clear()
 {
@@ -1014,13 +997,8 @@ void EventMachine_t::_RunSelectOnce()
 
 
 	{ // read and write the sockets
-		//timeval tv = {1, 0}; // Solaris fails if the microseconds member is >= 1000000.
-		//timeval tv = Quantum;
 		SelectData->tv = _TimeTilNextEvent();
 		int s = SelectData->_Select();
-		//rb_thread_blocking_region(xxx,(void*)&SelectData,RUBY_UBF_IO,0);
-		//int s = EmSelect (SelectData.maxsocket+1, &(SelectData.fdreads), &(SelectData.fdwrites), NULL, &(SelectData.tv));
-		//int s = SelectData.nSockets;
 		if (s > 0) {
 			/* Changed 01Jun07. We used to handle the Loop-breaker right here.
 			 * Now we do it AFTER all the regular descriptors. There's an
@@ -1084,20 +1062,7 @@ void EventMachine_t::_CleanBadDescriptors()
 		if (ed->ShouldDelete())
 			continue;
 
-		SOCKET sd = ed->GetSocket();
-
-		struct timeval tv;
-		tv.tv_sec = 0;
-		tv.tv_usec = 0;
-
-		rb_fdset_t fds;
-		rb_fd_init(&fds);
-		rb_fd_set(sd, &fds);
-
-		int ret = rb_fd_select(sd + 1, &fds, NULL, NULL, &tv);
-		rb_fd_term(&fds);
-
-		if (ret == -1) {
+		if (rb_wait_for_single_fd(ed->GetSocket(), RB_WAITFD_PRI, NULL) < 0) {
 			if (errno == EBADF)
 				ed->ScheduleClose(false);
 		}
@@ -1134,7 +1099,7 @@ void EventMachine_t::_RunTimers()
 	// one that hasn't expired yet.
 
 	while (true) {
-		multimap<uint64_t,Timer_t>::iterator i = Timers.begin();
+		std::multimap<uint64_t,Timer_t>::iterator i = Timers.begin();
 		if (i == Timers.end())
 			break;
 		if (i->first > MyCurrentLoopTime)
@@ -1145,6 +1110,14 @@ void EventMachine_t::_RunTimers()
 	}
 }
 
+/*********************************************
+EventMachine_t::_GetNumberOfOutstandingTimers
+*********************************************/
+
+size_t EventMachine_t::GetTimerCount()
+{
+	return Timers.size();
+}
 
 
 /***********************************
@@ -1161,9 +1134,9 @@ const uintptr_t EventMachine_t::InstallOneshotTimer (uint64_t milliseconds)
 
 	Timer_t t;
 	#ifndef HAVE_MAKE_PAIR
-	multimap<uint64_t,Timer_t>::iterator i = Timers.insert (multimap<uint64_t,Timer_t>::value_type (fire_at, t));
+	std::multimap<uint64_t,Timer_t>::iterator i = Timers.insert (std::multimap<uint64_t,Timer_t>::value_type (fire_at, t));
 	#else
-	multimap<uint64_t,Timer_t>::iterator i = Timers.insert (make_pair (fire_at, t));
+	std::multimap<uint64_t,Timer_t>::iterator i = Timers.insert (std::make_pair (fire_at, t));
 	#endif
 	return i->second.GetBinding();
 }
@@ -1840,7 +1813,7 @@ void EventMachine_t::_ModifyDescriptors()
 
 	#ifdef HAVE_EPOLL
 	if (Poller == Poller_Epoll) {
-		set<EventableDescriptor*>::iterator i = ModifiedDescriptors.begin();
+		std::set<EventableDescriptor*>::iterator i = ModifiedDescriptors.begin();
 		while (i != ModifiedDescriptors.end()) {
 			assert (*i);
 			_ModifyEpollEvent (*i);
@@ -1851,7 +1824,7 @@ void EventMachine_t::_ModifyDescriptors()
 
 	#ifdef HAVE_KQUEUE
 	if (Poller == Poller_Kqueue) {
-		set<EventableDescriptor*>::iterator i = ModifiedDescriptors.begin();
+		std::set<EventableDescriptor*>::iterator i = ModifiedDescriptors.begin();
 		while (i != ModifiedDescriptors.end()) {
 			assert (*i);
 			if ((*i)->GetKqueueArmWrite())
@@ -2129,7 +2102,7 @@ const uintptr_t EventMachine_t::WatchPid (int pid)
 		throw std::runtime_error(errbuf);
 	}
 	Bindable_t* b = new Bindable_t();
-	Pids.insert(make_pair (pid, b));
+	Pids.insert(std::make_pair (pid, b));
 
 	return b->GetBinding();
 }
@@ -2166,7 +2139,7 @@ void EventMachine_t::UnwatchPid (int pid)
 
 void EventMachine_t::UnwatchPid (const uintptr_t sig)
 {
-	for(map<int, Bindable_t*>::iterator i=Pids.begin(); i != Pids.end(); i++)
+	for(std::map<int, Bindable_t*>::iterator i=Pids.begin(); i != Pids.end(); i++)
 	{
 		if (i->second->GetBinding() == sig) {
 			UnwatchPid (i->first);
@@ -2228,7 +2201,7 @@ const uintptr_t EventMachine_t::WatchFile (const char *fpath)
 
 	if (wd != -1) {
 		Bindable_t* b = new Bindable_t();
-		Files.insert(make_pair (wd, b));
+		Files.insert(std::make_pair (wd, b));
 
 		return b->GetBinding();
 	}
@@ -2262,7 +2235,7 @@ void EventMachine_t::UnwatchFile (int wd)
 
 void EventMachine_t::UnwatchFile (const uintptr_t sig)
 {
-	for(map<int, Bindable_t*>::iterator i=Files.begin(); i != Files.end(); i++)
+	for(std::map<int, Bindable_t*>::iterator i=Files.begin(); i != Files.end(); i++)
 	{
 		if (i->second->GetBinding() == sig) {
 			UnwatchFile (i->first);
@@ -2293,7 +2266,7 @@ void EventMachine_t::_ReadInotifyEvents()
 		int current = 0;
 		while (current < returned) {
 			struct inotify_event* event = (struct inotify_event*)(buffer+current);
-			map<int, Bindable_t*>::const_iterator bindable = Files.find(event->wd);
+			std::map<int, Bindable_t*>::const_iterator bindable = Files.find(event->wd);
 			if (bindable != Files.end()) {
 				if (event->mask & (IN_MODIFY | IN_CREATE | IN_DELETE | IN_MOVE)){
 					(*EventCallback)(bindable->second->GetBinding(), EM_CONNECTION_READ, "modified", 8);

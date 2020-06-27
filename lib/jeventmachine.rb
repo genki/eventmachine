@@ -80,6 +80,20 @@ module EventMachine
   # @private
   SslVerify = 109
 
+  # @private
+  EM_PROTO_SSLv2 = 2
+  # @private
+  EM_PROTO_SSLv3 = 4
+  # @private
+  EM_PROTO_TLSv1 = 8
+  # @private
+  EM_PROTO_TLSv1_1 = 16
+  # @private
+  EM_PROTO_TLSv1_2 = 32
+
+  NULL_EM_REACTOR = com.rubyeventmachine.NullEmReactor.new
+  @em ||= NULL_EM_REACTOR
+
   # Exceptions that are defined in rubymain.cpp
   class ConnectionError < RuntimeError; end
   class ConnectionNotBound < RuntimeError; end
@@ -104,7 +118,7 @@ module EventMachine
     @em = JEM.new
   end
   def self.release_machine
-    @em = nil
+    @em = NULL_EM_REACTOR
   end
   def self.add_oneshot_timer interval
     @em.installOneshotTimer interval
@@ -127,6 +141,8 @@ module EventMachine
   end
   def self.send_data sig, data, length
     @em.sendData sig, data.to_java_bytes
+  rescue java.lang.NullPointerException
+    0
   end
   def self.send_datagram sig, data, length, address, port
     @em.sendDatagram sig, data.to_java_bytes, length, address, port
@@ -300,4 +316,3 @@ module EventMachine
     end
   end
 end
-

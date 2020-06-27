@@ -1,4 +1,4 @@
-require 'em_test_helper'
+require_relative 'em_test_helper'
 
 class TestTimers < Test::Unit::TestCase
 
@@ -98,6 +98,26 @@ class TestTimers < Test::Unit::TestCase
     EM.run {
       EM.add_timer(large_value) { EM.stop }
       EM.add_timer(0.02) { EM.stop }
+    }
+  end
+
+  def test_add_timer_increments_timer_count
+    EM.run {
+      n = EM.get_timer_count
+      EM::Timer.new(0.01) {
+        EM.stop
+      }
+      assert_equal(n+1, EM.get_timer_count)
+    }
+  end
+
+  def test_timer_run_decrements_timer_count
+    EM.run {
+      n = EM.get_timer_count
+      EM::Timer.new(0.01) {
+        assert_equal(n, EM.get_timer_count)
+        EM.stop
+      }
     }
   end
 
